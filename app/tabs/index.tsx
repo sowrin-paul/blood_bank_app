@@ -4,27 +4,54 @@ import {
     ScrollView,
     TouchableOpacity,
     StatusBar,
+    ActivityIndicator,
+    Platform,
+    TextInput,
 } from 'react-native';
+import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ComponentProps } from 'react';
 import "@/global.css";
 import { FontAwesome5 } from "@expo/vector-icons";
 
 type FontAwesome5Name = ComponentProps<typeof FontAwesome5>['name'];
 
-const BLOOD_STATS = [
-    { group: 'O−', units: 12, status: 'Critical', statusColor: 'bg-red-600', statusText: 'text-white', iconBg: 'bg-red-100', dot: 'bg-red-500' },
-    { group: 'A+', units: 84, status: 'Good', statusColor: 'bg-green-600', statusText: 'text-white', iconBg: 'bg-green-100', dot: 'bg-green-500' },
-    { group: 'B−', units: 27, status: 'Low', statusColor: 'bg-amber-600', statusText: 'text-white', iconBg: 'bg-amber-100', dot: 'bg-amber-500' },
-    { group: 'AB+', units: 61, status: 'Good', statusColor: 'bg-green-600', statusText: 'text-white', iconBg: 'bg-green-100', dot: 'bg-green-500' },
-];
+type BloodAvailabilityItem = {
+    group: string;
+    units: number;
+};
 
-const BLOOD_PILLS = [
-    { group: 'O+', level: 'low' },
-    { group: 'A−', level: 'ok' },
-    { group: 'B+', level: 'med' },
-    { group: 'AB−', level: 'ok' },
-    { group: 'O−', level: 'low' },
-];
+const API_BASE_URL =
+    process.env.EXPO_PUBLIC_API_URL ??
+    (Platform.OS === 'android' ? 'http://192.168.0.102:8000/api' : 'http://127.0.0.1:8000/api');
+
+const getStatus = (units: number) => {
+    if (units <= 15) {
+        return {
+            status: 'Critical',
+            statusColor: 'bg-red-600',
+            statusText: 'text-white',
+            iconBg: 'bg-red-100',
+            dot: 'bg-red-500',
+        };
+    }
+    if (units <= 35) {
+        return {
+            status: 'Low',
+            statusColor: 'bg-amber-600',
+            statusText: 'text-white',
+            iconBg: 'bg-amber-100',
+            dot: 'bg-amber-500',
+        };
+    }
+    return {
+        status: 'Good',
+        statusColor: 'bg-green-600',
+        statusText: 'text-white',
+        iconBg: 'bg-green-100',
+        dot: 'bg-green-500',
+    };
+};
 
 const NOTIFICATIONS = [
     {
@@ -59,18 +86,112 @@ const HISTORY = [
     { hospital: 'Ibn Sina Hospital', date: 'Apr 20, 2024', group: 'A+', units: 2 },
 ];
 
-function SectionHeader({ title, onSeeAll }: { title: string; onSeeAll?: () => void }) {
+function SectionHeader({ title, onSeeAll, isExpanded }: { title: string; onSeeAll?: () => void; isExpanded?: boolean }) {
     return (
         <View className="flex-row items-center justify-between mb-4 px-1">
             <Text className="text-lg font-bold text-gray-900">{title}</Text>
-            <TouchableOpacity onPress={onSeeAll}>
-                <Text className="text-sm font-semibold text-red-600">See all →</Text>
-            </TouchableOpacity>
+            {onSeeAll && (
+                <TouchableOpacity onPress={onSeeAll}>
+                    <Text className="text-sm font-semibold text-red-600">
+                        {isExpanded ? '← Show less' : 'See all →'}
+                    </Text>
+                </TouchableOpacity>
+            )}
         </View>
     );
 }
 
 export default function HomeScreen() {
+    const [displayName, setDisplayName] = useState('');
+    const [greeting, setGreeting] = useState('Hello');
+    const [availability, setAvailability] = useState<BloodAvailabilityItem[]>([]);
+    const [isLoadingAvailability, setIsLoadingAvailability] = useState(true);
+    const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [isSearching, setIsSearching] = useState(false);
+    const [showAllGroups, setShowAllGroups] = useState(false);
+
+    useEffect(() => {
+        const loadName = async () => {
+            try {
+                const raw = await AsyncStorage.getItem('auth_user');
+                if (!raw) {
+                    setDisplayName('');
+                    return;
+                }
+                const user = JSON.parse(raw) as { first_name?: string; last_name?: string };
+                const fullName = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim();
+                setDisplayName(fullName);
+            } catch (error) {
+                console.warn('Failed to load user name', error);
+                setDisplayName('');
+            }
+        };
+
+        loadName();
+    }, []);
+
+    useEffect(() => {
+        const hour = new Date().getHours();
+        if (hour < 12) {
+            setGreeting('Good morning');
+        } else if (hour < 18) {
+            setGreeting('Good afternoon');
+        } else {
+            setGreeting('Good evening');
+        }
+    }, []);
+
+    useEffect(() => {
+        const loadAvailability = async () => {
+            try {
+                setIsLoadingAvailability(true);
+                const token = await AsyncStorage.getItem('auth_access_token');
+                const response = await fetch(`${API_BASE_URL}/requests/blood-availability/`, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                });
+                const data = await response.json();
+                if (response.ok && Array.isArray(data?.results)) {
+                    setAvailability(data.results as BloodAvailabilityItem[]);
+                } else {
+                    setAvailability([]);
+                }
+            } catch (error) {
+                console.warn('Failed to load blood availability', error);
+                setAvailability([]);
+            } finally {
+                setIsLoadingAvailability(false);
+            }
+        };
+
+        loadAvailability();
+    }, []);
+
+    const searchBloodGroups = (query: string) => {
+        setSearchQuery(query);
+        if (!query.trim()) {
+            setSelectedGroup(null);
+            setIsSearching(false);
+        } else {
+            setIsSearching(true);
+        }
+    };
+
+    const availabilityWithStatus = availability.map((item) => ({
+        ...item,
+        ...getStatus(item.units),
+    }));
+
+    const searchResults = searchQuery.trim()
+        ? availabilityWithStatus.filter((item) =>
+            item.group.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+        : [];
+
+    const filteredAvailability = selectedGroup
+        ? availabilityWithStatus.filter((item) => item.group === selectedGroup)
+        : availabilityWithStatus;
+
     return (
         <View className="flex-1 bg-white">
             <StatusBar barStyle="light-content" backgroundColor="#DC2626" />
@@ -81,9 +202,9 @@ export default function HomeScreen() {
                     {/* Top Row */}
                     <View className="flex-row items-center justify-between mb-6">
                         <View className="gap-1">
-                            <Text className="text-white/80 text-sm font-medium">Good morning 👋</Text>
+                            <Text className="text-white/80 text-sm font-medium">{greeting} 👋</Text>
                             <Text className="text-white text-2xl font-bold" numberOfLines={1}>
-                               Smriti Paul
+                               {displayName || 'Welcome'}
                             </Text>
                         </View>
                         <TouchableOpacity className="w-11 h-11 bg-white/20 rounded-2xl items-center justify-center">
@@ -93,15 +214,61 @@ export default function HomeScreen() {
                     </View>
 
                     {/* Modern Search Bar */}
-                    <TouchableOpacity className="flex-row items-center gap-3 bg-white/15 border border-white/30 rounded-2xl px-4 py-3.5">
+                    <View className="flex-row items-center gap-3 bg-white/15 border border-white/30 rounded-2xl px-4 py-3.5">
                         <FontAwesome5 name="search" size={16} color="rgba(255,255,255,0.8)" solid />
-                        <Text className="text-white/70 text-sm flex-1 font-medium">
-                            Search blood groups…
-                        </Text>
-                        {/*<View className="bg-white/20 rounded-lg px-2.5 py-1.5">*/}
-                        {/*    <Text className="text-white/90 text-xs font-bold">⚙️</Text>*/}
-                        {/*</View>*/}
-                    </TouchableOpacity>
+                        <TextInput
+                            className="text-white/70 text-sm flex-1 font-medium"
+                            placeholder="Search blood groups…"
+                            placeholderTextColor="rgba(255,255,255,0.5)"
+                            value={searchQuery}
+                            onChangeText={searchBloodGroups}
+                        />
+                        {searchQuery ? (
+                            <TouchableOpacity onPress={() => searchBloodGroups('')}>
+                                <FontAwesome5 name="times" size={14} color="rgba(255,255,255,0.8)" solid />
+                            </TouchableOpacity>
+                        ) : null}
+                    </View>
+
+                    {/* Search Results Dropdown */}
+                    {isSearching && searchResults.length > 0 && (
+                        <View className="bg-white rounded-2xl border border-gray-100 shadow-lg mt-2 overflow-hidden">
+                            {searchResults.map((result) => (
+                                <TouchableOpacity
+                                    key={result.group}
+                                    onPress={() => {
+                                        setSelectedGroup(result.group);
+                                        setSearchQuery('');
+                                        setIsSearching(false);
+                                    }}
+                                    className="px-4 py-3.5 border-b border-gray-100 flex-row items-center justify-between"
+                                >
+                                    <View className="flex-row items-center gap-3 flex-1">
+                                        <View className={`w-10 h-10 ${result.iconBg} rounded-xl items-center justify-center`}>
+                                            <FontAwesome5 name="tint" size={16} color="rgb(234, 12, 12)" solid />
+                                        </View>
+                                        <View className="flex-1">
+                                            <Text className="text-sm font-bold text-gray-900">{result.group}</Text>
+                                            <Text className="text-xs text-gray-500">{result.units} units available</Text>
+                                        </View>
+                                    </View>
+                                    <View className={`${result.statusColor} rounded-full px-2.5 py-1`}>
+                                        <Text className={`text-xs font-bold ${result.statusText}`}>
+                                            {result.status}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    )}
+
+                    {isSearching && searchResults.length === 0 && searchQuery.trim() && (
+                        <View className="bg-white rounded-2xl border border-gray-100 shadow-lg mt-2 px-4 py-4">
+                            <Text className="text-sm text-gray-500 text-center">
+                                No blood groups found matching &quot;{searchQuery}&quot;
+                            </Text>
+                        </View>
+                    )}
                 </View>
 
                 {/* Content */}
@@ -109,65 +276,82 @@ export default function HomeScreen() {
 
                     {/* Blood Availability */}
                     <View>
-                        <SectionHeader title="Blood Availability" />
-                        <View className="flex-row flex-wrap gap-3">
-                            {BLOOD_STATS.map((item) => (
-                                <TouchableOpacity
-                                    key={item.group}
-                                    className="bg-white border border-gray-100 rounded-3xl p-4 shadow-sm"
-                                    style={{ width: '48%' }}
-                                >
-                                    <View className="gap-3">
-                                        <View className="flex-row items-center justify-between">
-                                            <View className={`w-10 h-10 ${item.iconBg} rounded-xl items-center justify-center`}>
-                                                <FontAwesome5 name="tint" size={16} color="rgb(234, 12, 12)" solid />
+                        <SectionHeader
+                            title="Blood Availability"
+                            onSeeAll={() => setShowAllGroups(!showAllGroups)}
+                            isExpanded={showAllGroups}
+                        />
+                        {isLoadingAvailability ? (
+                            <View className="items-center py-6">
+                                <ActivityIndicator size="small" color="#dc2626" />
+                                <Text className="text-xs text-gray-500 mt-2">Loading availability...</Text>
+                            </View>
+                        ) : (
+                            <>
+                                <View className="flex-row flex-wrap gap-3">
+                                    {availabilityWithStatus.slice(0, showAllGroups ? undefined : 4).map((item) => (
+                                        <TouchableOpacity
+                                            key={item.group}
+                                            className="bg-white border border-gray-100 rounded-3xl p-4 shadow-sm"
+                                            style={{ width: '48%' }}
+                                            onPress={() =>
+                                                setSelectedGroup((current) => (current === item.group ? null : item.group))
+                                            }
+                                        >
+                                            <View className="gap-3">
+                                                <View className="flex-row items-center justify-between">
+                                                    <View className={`w-10 h-10 ${item.iconBg} rounded-xl items-center justify-center`}>
+                                                        <FontAwesome5 name="tint" size={16} color="rgb(234, 12, 12)" solid />
+                                                    </View>
+                                                    <View className={`${item.statusColor} rounded-full px-2.5 py-1`}>
+                                                        <Text className={`text-xs font-bold ${item.statusText}`}>
+                                                            {item.status}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                <View>
+                                                    <Text className="text-3xl font-bold text-gray-900">
+                                                        {item.units}
+                                                    </Text>
+                                                    <Text className="text-xs text-gray-500 font-medium mt-1">
+                                                        {item.group} units
+                                                    </Text>
+                                                </View>
                                             </View>
-                                            <View className={`${item.statusColor} rounded-full px-2.5 py-1`}>
-                                                <Text className={`text-xs font-bold ${item.statusText}`}>
-                                                    {item.status}
-                                                </Text>
-                                            </View>
-                                        </View>
-                                        <View>
-                                            <Text className="text-3xl font-bold text-gray-900">
-                                                {item.units}
-                                            </Text>
-                                            <Text className="text-xs text-gray-500 font-medium mt-1">
-                                                {item.group} units
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+                            </>
+                        )}
 
                         {/* Blood Group Pills */}
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            className="mt-5"
-                            contentContainerStyle={{ gap: 10, paddingHorizontal: 0 }}
-                        >
-                            {BLOOD_PILLS.map((pill, i) => (
-                                <TouchableOpacity
-                                    key={i}
-                                    className="flex-row items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-4 py-2.5 shadow-sm"
-                                >
-                                    <View
-                                        className={`w-2.5 h-2.5 rounded-full ${
-                                            pill.level === 'low'
-                                                ? 'bg-red-500'
-                                                : pill.level === 'ok'
-                                                    ? 'bg-green-500'
-                                                    : 'bg-amber-500'
+                        <View>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                className="mt-5"
+                                contentContainerStyle={{ gap: 10, paddingHorizontal: 0 }}
+                            >
+                                {availabilityWithStatus.map((pill) => (
+                                    <TouchableOpacity
+                                        key={pill.group}
+                                        className={`flex-row items-center gap-2 rounded-full px-4 py-2.5 shadow-sm border ${
+                                            selectedGroup === pill.group
+                                                ? 'bg-red-50 border-red-300'
+                                                : 'bg-gray-50 border-gray-200'
                                         }`}
-                                    />
-                                    <Text className="text-sm font-bold text-gray-700">
-                                        {pill.group}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
+                                        onPress={() =>
+                                            setSelectedGroup((current) => (current === pill.group ? null : pill.group))
+                                        }
+                                    >
+                                        <View className={`w-2.5 h-2.5 rounded-full ${pill.dot}`} />
+                                        <Text className="text-sm font-bold text-gray-700">
+                                            {pill.group}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
                     </View>
 
                     {/* Quick Action Card */}

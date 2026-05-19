@@ -8,12 +8,14 @@ import {
     Platform,
     StatusBar,
     Image,
+    Alert,
     type ImageSourcePropType,
 } from 'react-native';
 import { useEffect, useState } from 'react';
 import type { ComponentProps } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {FontAwesome5} from "@expo/vector-icons";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Tab = 'login' | 'signup';
 type Role = 'Donor' | 'Receiver';
@@ -27,6 +29,35 @@ const ROLES: RoleItem[] = [
     { label: 'Donor', iconType: 'font', icon: 'tint', color: 'rgb(234, 12, 12)' },
     { label: 'Receiver', iconType: 'image', image: require('../../assets/icons/blood-transfusion.png') },
 ];
+
+const API_BASE_URL =
+    process.env.EXPO_PUBLIC_API_URL ??
+    (Platform.OS === 'android' ? 'http://192.168.0.102:8000/api' : 'http://127.0.0.1:8000/api');
+
+const buildErrorMessage = (data: unknown): string => {
+    if (!data || typeof data !== 'object') {
+        return 'Authentication failed.';
+    }
+
+    const record = data as Record<string, unknown>;
+    if (typeof record.detail === 'string') {
+        return record.detail;
+    }
+
+    const errorEntries = Object.entries(record)
+        .map(([field, value]) => {
+            if (Array.isArray(value)) {
+                return `${field}: ${value.join(' ')}`;
+            }
+            if (typeof value === 'string') {
+                return `${field}: ${value}`;
+            }
+            return null;
+        })
+        .filter(Boolean);
+
+    return errorEntries.length > 0 ? errorEntries.join('\n') : 'Authentication failed.';
+};
 
 export default function AuthScreen() {
     const { tab } = useLocalSearchParams<{ tab?: string | string[] }>();
@@ -51,9 +82,61 @@ export default function AuthScreen() {
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
 
-    const handleAuth = () => {
-        // todo: real API call
-        router.replace('/tabs');
+    const handleAuth = async () => {
+        try {
+            const isSignup = activeTab === 'signup';
+            const endpoint = isSignup ? 'auth/register/' : 'auth/login/';
+            const trimmedLogin = loginEmail.trim();
+            const isEmailLogin = trimmedLogin.includes('@');
+            const payload = isSignup
+                ? {
+                      first_name: firstName.trim(),
+                      last_name: lastName.trim(),
+                      phone_number: phone.trim(),
+                      email: email.trim(),
+                      password,
+                      role: selectedRole.toLowerCase(),
+                  }
+                : isEmailLogin
+                  ? {
+                        email: trimmedLogin,
+                        email_or_phone: trimmedLogin,
+                        password: loginPassword,
+                    }
+                  : {
+                        email_or_phone: trimmedLogin,
+                        password: loginPassword,
+                    };
+
+            const response = await fetch(`${API_BASE_URL}/${endpoint}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                const message = buildErrorMessage(data);
+                Alert.alert('Auth error', message);
+                return;
+            }
+
+            if (data?.access && data?.refresh) {
+                await AsyncStorage.setItem('auth_access_token', data.access);
+                await AsyncStorage.setItem('auth_refresh_token', data.refresh);
+            }
+
+            if (data?.user) {
+                await AsyncStorage.setItem('auth_user', JSON.stringify(data.user));
+            }
+
+            router.replace('/tabs');
+        } catch (error) {
+            console.warn('Auth error:', error);
+            Alert.alert('Auth error', 'Could not connect to the server.');
+        }
     };
 
     return (
@@ -274,7 +357,7 @@ export default function AuthScreen() {
                             {/* Email Input */}
                             <View className="gap-2">
                                 <Text className="text-xs font-semibold text-gray-700 ml-1">
-                                    Email or phone
+                                    Email address
                                 </Text>
                                 <TextInput
                                     value={loginEmail}

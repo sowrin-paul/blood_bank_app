@@ -2,22 +2,53 @@ import { Tabs, router } from 'expo-router';
 import { View, Text, TouchableOpacity } from 'react-native';
 import "@/global.css";
 import { FontAwesome5 } from "@expo/vector-icons";
+import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-function RequestButton() {
+type Role = 'donor' | 'receiver' | null;
+
+function ActionButton({ label, route, icon }: { label: string; route: string; icon: 'heartbeat' | 'hand-holding-heart' }) {
     return (
         <TouchableOpacity
-            onPress={() => router.push('/tabs/request')}
+            onPress={() => router.push(route)}
             className="items-center -mt-5"
         >
             <View className="w-14 h-14 bg-[#A32D2D] rounded-full items-center justify-center border-4 border-white shadow-md">
-                <FontAwesome5 name="heartbeat" size={20} color="#fff" solid />
+                <FontAwesome5 name={icon} size={20} color="#fff" solid />
             </View>
-            <Text className="text-[10px] text-[#A32D2D] font-medium mt-1">Request</Text>
+            <Text className="text-[10px] text-[#A32D2D] font-medium mt-1">{label}</Text>
         </TouchableOpacity>
     );
 }
 
 export default function TabsLayout() {
+    const [role, setRole] = useState<Role>(null);
+
+    useEffect(() => {
+        const loadRole = async () => {
+            try {
+                const raw = await AsyncStorage.getItem('auth_user');
+                if (!raw) {
+                    setRole(null);
+                    return;
+                }
+                const user = JSON.parse(raw) as { role?: string };
+                const normalized = user.role?.toLowerCase() as Role | undefined;
+                setRole(normalized ?? null);
+            } catch (error) {
+                console.warn('Failed to load user role', error);
+                setRole(null);
+            }
+        };
+
+        loadRole();
+    }, []);
+
+    const isDonor = role === 'donor';
+    const actionRoute = '/tabs/request';
+    const actionLabel = isDonor ? 'Donate' : 'Request';
+    const actionIcon = isDonor ? 'hand-holding-heart' : 'heartbeat';
+
     return (
         <Tabs
             screenOptions={{
@@ -61,7 +92,21 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="request"
                 options={{
-                    tabBarButton: () => <RequestButton />,
+                    tabBarButton: () => (
+                        <ActionButton label={actionLabel} route={actionRoute} icon={actionIcon} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
+                name="donor"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
+                name="receiver"
+                options={{
+                    href: null,
                 }}
             />
             <Tabs.Screen
